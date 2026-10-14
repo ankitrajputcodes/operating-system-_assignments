@@ -1,0 +1,39 @@
+xv6...
+cpu0: starting 0
+sb: size 1000 nblocks 941 ninodes 200 nlog 30 logstart 2 inodestart 32 bmap start 58
+init: starting sh
+$ vmprinttest
+=== initial page table (guard is mapped with U=0) ===
+PDE 0: pt_pa=0xdee7000 flags=0x27
+  PTE 0: va=0x0 pa=0xdee8000 P=1 W=1 U=1
+  PTE 1: va=0x1000 pa=0xdee6000 P=1 W=1 U=0
+  PTE 2: va=0x2000 pa=0xdee5000 P=1 W=1 U=1
+kernel PDE entries: 64
+=== after sbrk(8 pages) ===
+PDE 0: pt_pa=0xdee7000 flags=0x27
+  PTE 0: va=0x0 pa=0xdee8000 P=1 W=1 U=1
+  PTE 1: va=0x1000 pa=0xdee6000 P=1 W=1 U=0
+  PTE 2: va=0x2000 pa=0xdee5000 P=1 W=1 U=1
+  PTE 3: va=0x3000 pa=0xdfbc000 P=1 W=1 U=1
+  PTE 4: va=0x4000 pa=0xdf76000 P=1 W=1 U=1
+  PTE 5: va=0x5000 pa=0xdfbf000 P=1 W=1 U=1
+  PTE 6: va=0x6000 pa=0xdfc0000 P=1 W=1 U=1
+  PTE 7: va=0x7000 pa=0xdfc1000 P=1 W=1 U=1
+  PTE 8: va=0x8000 pa=0xdfc2000 P=1 W=1 U=1
+  PTE 9: va=0x9000 pa=0xdfc3000 P=1 W=1 U=1
+  PTE 10: va=0xa000 pa=0xdfc4000 P=1 W=1 U=1
+kernel PDE entries: 64
+=== after sbrk(-1 page) ===
+PDE 0: pt_pa=0xdee7000 flags=0x27
+  PTE 0: va=0x0 pa=0xdee8000 P=1 W=1 U=1
+  PTE 1: va=0x1000 pa=0xdee6000 P=1 W=1 U=0
+  PTE 2: va=0x2000 pa=0xdee5000 P=1 W=1 U=1
+  PTE 3: va=0x3000 pa=0xdfbc000 P=1 W=1 U=1
+  PTE 4: va=0x4000 pa=0xdf76000 P=1 W=1 U=1
+  PTE 5: va=0x5000 pa=0xdfbf000 P=1 W=1 U=1
+  PTE 6: va=0x6000 pa=0xdfc0000 P=1 W=1 U=1
+  PTE 7: va=0x7000 pa=0xdfc1000 P=1 W=1 U=1
+  PTE 8: va=0x8000 pa=0xdfc2000 P=1 W=1 U=1
+  PTE 9: va=0x9000 pa=0xdfc3000 P=1 W=1 U=1
+kernel PDE entries: 64
+$

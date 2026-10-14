@@ -1,0 +1,402 @@
+diff --git a/Makefile b/Makefile
+index 09d790c..6513602 100644
+--- a/Makefile
++++ b/Makefile
+@@ -181,6 +181,10 @@ UPROGS=\
+ 	_usertests\
+ 	_wc\
+ 	_zombie\
++	_vatest\
++	_memtest\
++	_vmprinttest\
++	_lazytest\
+ 
+ fs.img: mkfs README $(UPROGS)
+ 	./mkfs fs.img README $(UPROGS)
+diff --git a/defs.h b/defs.h
+index 82fb982..939a197 100644
+--- a/defs.h
++++ b/defs.h
+@@ -66,6 +66,7 @@ void            ioapicinit(void);
+ // kalloc.c
+ char*           kalloc(void);
+ void            kfree(char*);
++void            memstats(int*, int*);
+ void            kinit1(void*, void*);
+ void            kinit2(void*, void*);
+ 
+@@ -184,6 +185,8 @@ pde_t*          copyuvm(pde_t*, uint);
+ void            switchuvm(struct proc*);
+ void            switchkvm(void);
+ int             copyout(pde_t*, uint, void*, uint);
++int             lazyalloc(pde_t*, uint, uint);
++uint*           walkpgdir(pde_t*, const void*, int);
+ void            clearpteu(pde_t *pgdir, char *uva);
+ 
+ // number of elements in fixed-size array
+diff --git a/exec.c b/exec.c
+index b40134f..9befae2 100644
+--- a/exec.c
++++ b/exec.c
+@@ -12,7 +12,7 @@ exec(char *path, char **argv)
+ {
+   char *s, *last;
+   int i, off;
+-  uint argc, sz, sp, ustack[3+MAXARG+1];
++  uint argc, sz, sp, heapbase, ustack[3+MAXARG+1];
+   struct elfhdr elf;
+   struct inode *ip;
+   struct proghdr ph;
+@@ -67,6 +67,7 @@ exec(char *path, char **argv)
+     goto bad;
+   clearpteu(pgdir, (char*)(sz - 2*PGSIZE));
+   sp = sz;
++  heapbase = sz;
+ 
+   // Push argument strings, prepare rest of stack in ustack.
+   for(argc = 0; argv[argc]; argc++) {
+@@ -97,6 +98,7 @@ exec(char *path, char **argv)
+   oldpgdir = curproc->pgdir;
+   curproc->pgdir = pgdir;
+   curproc->sz = sz;
++  curproc->heapbase = heapbase;
+   curproc->tf->eip = elf.entry;  // main
+   curproc->tf->esp = sp;
+   switchuvm(curproc);
+diff --git a/kalloc.c b/kalloc.c
+index 14cd4f4..d1913c9 100644
+--- a/kalloc.c
++++ b/kalloc.c
+@@ -21,6 +21,8 @@ struct {
+   struct spinlock lock;
+   int use_lock;
+   struct run *freelist;
++  int free_pages;
++  int total_pages;
+ } kmem;
+ 
+ // Initialization happens in two phases.
+@@ -72,6 +74,9 @@ kfree(char *v)
+   r = (struct run*)v;
+   r->next = kmem.freelist;
+   kmem.freelist = r;
++  kmem.free_pages++;
++  if(!kmem.use_lock)
++    kmem.total_pages++;
+   if(kmem.use_lock)
+     release(&kmem.lock);
+ }
+@@ -87,10 +92,21 @@ kalloc(void)
+   if(kmem.use_lock)
+     acquire(&kmem.lock);
+   r = kmem.freelist;
+-  if(r)
++  if(r){
+     kmem.freelist = r->next;
++    kmem.free_pages--;
++  }
+   if(kmem.use_lock)
+     release(&kmem.lock);
+   return (char*)r;
+ }
+ 
++// Snapshot free and total pages while holding the allocator lock.
++void
++memstats(int *freep, int *totalp)
++{
++  acquire(&kmem.lock);
++  *freep = kmem.free_pages;
++  *totalp = kmem.total_pages;
++  release(&kmem.lock);
++}
+diff --git a/proc.c b/proc.c
+index 806b1b1..1752901 100644
+--- a/proc.c
++++ b/proc.c
+@@ -130,6 +130,7 @@ userinit(void)
+     panic("userinit: out of memory?");
+   inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
+   p->sz = PGSIZE;
++  p->heapbase = PGSIZE;
+   memset(p->tf, 0, sizeof(*p->tf));
+   p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
+   p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
+@@ -197,6 +198,7 @@ fork(void)
+     return -1;
+   }
+   np->sz = curproc->sz;
++  np->heapbase = curproc->heapbase;
+   np->parent = curproc;
+   *np->tf = *curproc->tf;
+ 
+diff --git a/proc.h b/proc.h
+index 1647114..0572d8c 100644
+--- a/proc.h
++++ b/proc.h
+@@ -37,6 +37,7 @@ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+ // Per-process state
+ struct proc {
+   uint sz;                     // Size of process memory (bytes)
++  uint heapbase;                // First byte eligible for lazy heap allocation
+   pde_t* pgdir;                // Page table
+   char *kstack;                // Bottom of kernel stack for this process
+   enum procstate state;        // Process state
+diff --git a/syscall.c b/syscall.c
+index ee85261..74207b4 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -103,6 +103,9 @@ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_va2pa(void);
++extern int sys_getmeminfo(void);
++extern int sys_vmprint(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -126,6 +129,9 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_va2pa]   sys_va2pa,
++[SYS_getmeminfo] sys_getmeminfo,
++[SYS_vmprint] sys_vmprint,
+ };
+ 
+ void
+diff --git a/syscall.h b/syscall.h
+index bc5f356..768dd27 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,3 +20,6 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_va2pa  22
++#define SYS_getmeminfo 23
++#define SYS_vmprint 24
+diff --git a/sysproc.c b/sysproc.c
+index 0686d29..aa281d0 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -6,6 +6,7 @@
+ #include "memlayout.h"
+ #include "mmu.h"
+ #include "proc.h"
++#include "meminfo.h"
+ 
+ int
+ sys_fork(void)
+@@ -51,11 +52,88 @@ sys_sbrk(void)
+   if(argint(0, &n) < 0)
+     return -1;
+   addr = myproc()->sz;
+-  if(growproc(n) < 0)
+-    return -1;
++  if(n > 0){
++    if((uint)n > KERNBASE - addr)
++      return -1;
++    myproc()->sz = addr + n;
++  } else if(n < 0){
++    if(growproc(n) < 0)
++      return -1;
++  }
+   return addr;
+ }
+ 
++int
++sys_va2pa(void)
++{
++  int va;
++  pte_t *pte;
++  uint pa, flags;
++
++  if(argint(0, &va) < 0 || (uint)va >= KERNBASE)
++    return -1;
++  pte = walkpgdir(myproc()->pgdir, (void*)va, 0);
++  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U))
++    return -1;
++  flags = PTE_FLAGS(*pte);
++  pa = PTE_ADDR(*pte) + ((uint)va & (PGSIZE - 1));
++  cprintf("va2pa va=0x%x pdi=%d pti=%d off=0x%x pa=0x%x P=%d W=%d U=%d\n",
++          va, PDX(va), PTX(va), (uint)va & (PGSIZE-1), pa,
++          !!(flags & PTE_P), !!(flags & PTE_W), !!(flags & PTE_U));
++  return (int)pa;
++}
++
++int
++sys_vmprint(void)
++{
++  int i, j, kernel_entries = 0;
++  pde_t *pgdir = myproc()->pgdir;
++  pte_t *pt;
++  uint va;
++
++  for(i = 0; i < NPDENTRIES; i++){
++    if(i >= PDX(KERNBASE)){
++      if(pgdir[i] & PTE_P)
++        kernel_entries++;
++      continue;
++    }
++    if(!(pgdir[i] & PTE_P))
++      continue;
++    cprintf("PDE %d: pt_pa=0x%x flags=0x%x\n", i,
++            PTE_ADDR(pgdir[i]), PTE_FLAGS(pgdir[i]));
++    pt = (pte_t*)P2V(PTE_ADDR(pgdir[i]));
++    for(j = 0; j < NPTENTRIES; j++){
++      if(!(pt[j] & PTE_P))
++        continue;
++      va = PGADDR(i, j, 0);
++      cprintf("  PTE %d: va=0x%x pa=0x%x P=%d W=%d U=%d\n", j, va,
++              PTE_ADDR(pt[j]), !!(pt[j]&PTE_P), !!(pt[j]&PTE_W), !!(pt[j]&PTE_U));
++    }
++  }
++  cprintf("kernel PDE entries: %d\n", kernel_entries);
++  return 0;
++}
++
++int
++sys_getmeminfo(void)
++{
++  char *u;
++  struct meminfo *mi;
++  struct proc *p = myproc();
++  int i, ptpages = 1;
++
++  if(argptr(0, &u, sizeof(*mi)) < 0)
++    return -1;
++  mi = (struct meminfo*)u;
++  for(i = 0; i < NPDENTRIES; i++)
++    if(p->pgdir[i] & PTE_P)
++      ptpages++;
++  memstats(&mi->free_pages, &mi->total_pages);
++  mi->process_pages = p->sz / PGSIZE;
++  mi->page_table_pages = ptpages;
++  return 0;
++}
++
+ int
+ sys_sleep(void)
+ {
+diff --git a/trap.c b/trap.c
+index 41c66eb..7161177 100644
+--- a/trap.c
++++ b/trap.c
+@@ -46,6 +46,15 @@ trap(struct trapframe *tf)
+     return;
+   }
+ 
++  // Demand allocate reserved heap pages, including kernel access via read/write.
++  if(tf->trapno == T_PGFLT){
++    uint va = rcr2();
++    struct proc *p = myproc();
++    if(p && va < KERNBASE && va >= p->heapbase && va < p->sz &&
++       lazyalloc(p->pgdir, va, p->sz) == 0)
++      return;
++  }
++
+   switch(tf->trapno){
+   case T_IRQ0 + IRQ_TIMER:
+     if(cpuid() == 0){
+diff --git a/user.h b/user.h
+index 4f99c52..e108a85 100644
+--- a/user.h
++++ b/user.h
+@@ -23,6 +23,10 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int va2pa(int);
++struct meminfo;
++int getmeminfo(struct meminfo*);
++int vmprint(void);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/usys.S b/usys.S
+index 8bfd8a1..d8b82f4 100644
+--- a/usys.S
++++ b/usys.S
+@@ -29,3 +29,6 @@ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(va2pa)
++SYSCALL(getmeminfo)
++SYSCALL(vmprint)
+diff --git a/vm.c b/vm.c
+index 7134cff..5f1d912 100644
+--- a/vm.c
++++ b/vm.c
+@@ -32,7 +32,7 @@ seginit(void)
+ // Return the address of the PTE in page table pgdir
+ // that corresponds to virtual address va.  If alloc!=0,
+ // create any required page table pages.
+-static pte_t *
++pte_t *
+ walkpgdir(pde_t *pgdir, const void *va, int alloc)
+ {
+   pde_t *pde;
+@@ -323,10 +323,9 @@ copyuvm(pde_t *pgdir, uint sz)
+   if((d = setupkvm()) == 0)
+     return 0;
+   for(i = 0; i < sz; i += PGSIZE){
+-    if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
+-      panic("copyuvm: pte should exist");
+-    if(!(*pte & PTE_P))
+-      panic("copyuvm: page not present");
++    pte = walkpgdir(pgdir, (void *) i, 0);
++    if(pte == 0 || !(*pte & PTE_P))
++      continue;  // A lazy heap page has no physical frame yet.
+     pa = PTE_ADDR(*pte);
+     flags = PTE_FLAGS(*pte);
+     if((mem = kalloc()) == 0)
+@@ -352,13 +351,37 @@ uva2ka(pde_t *pgdir, char *uva)
+   pte_t *pte;
+ 
+   pte = walkpgdir(pgdir, uva, 0);
+-  if((*pte & PTE_P) == 0)
++  if(pte == 0 || (*pte & PTE_P) == 0)
+     return 0;
+   if((*pte & PTE_U) == 0)
+     return 0;
+   return (char*)P2V(PTE_ADDR(*pte));
+ }
+ 
++// Materialize one zero-filled lazy heap page when kernel copyout targets it.
++int
++lazyalloc(pde_t *pgdir, uint va, uint sz)
++{
++  struct proc *p = myproc();
++  char *mem;
++  uint a = PGROUNDDOWN(va);
++  pte_t *pte;
++
++  if(p == 0 || p->pgdir != pgdir || a < p->heapbase || a >= sz || a >= KERNBASE)
++    return -1;
++  pte = walkpgdir(pgdir, (char*)a, 0);
++  if(pte && (*pte & PTE_P))
++    return -1;
++  if((mem = kalloc()) == 0)
++    return -1;
++  memset(mem, 0, PGSIZE);
++  if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
++    kfree(mem);
++    return -1;
++  }
++  return 0;
++}
++
+ // Copy len bytes from p to user address va in page table pgdir.
+ // Most useful when pgdir is not the current page table.
+ // uva2ka ensures this only works for PTE_U pages.
+@@ -372,6 +395,8 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
+   while(len > 0){
+     va0 = (uint)PGROUNDDOWN(va);
+     pa0 = uva2ka(pgdir, (char*)va0);
++    if(pa0 == 0 && lazyalloc(pgdir, va0, myproc()->sz) == 0)
++      pa0 = uva2ka(pgdir, (char*)va0);
+     if(pa0 == 0)
+       return -1;
+     n = PGSIZE - (va - va0);

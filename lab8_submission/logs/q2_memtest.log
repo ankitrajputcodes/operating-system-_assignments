@@ -1,0 +1,11 @@
+xv6...
+cpu0: starting 0
+sb: size 1000 nblocks 941 ninodes 200 nlog 30 logstart 2 inodestart 32 bmap start 58
+init: starting sh
+$ memtest
+before: total=57065 free=56789 process=3 page-tables=66
+after touching two pages: total=57065 free=56787 process=11 page-tables=66
+child after fork and touch: total=57065 free=56714 process=11 page-tables=66
+after reaping child: total=57065 free=56787 process=11 page-tables=66
+reaped free pages recovered (child-start=56787 now=56787)
+$

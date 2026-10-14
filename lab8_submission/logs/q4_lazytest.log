@@ -1,0 +1,22 @@
+xv6...
+cpu0: starting 0
+sb: size 1000 nblocks 941 ninodes 200 nlog 30 logstart 2 inodestart 32 bmap start 58
+init: starting sh
+$ lazytest
+before reservation: free=56789 user-pages=3 page-tables=66
+after 32 MB reservation: free=56789 user-pages=8195 page-tables=66
+after touching seven sparse pages: free=56776 user-pages=8195 page-tables=72
+kernel write from untouched buffer: <NUL>va2pa va=0x2003000 pdi=8 pti=3 off=0x0 pa=0xdfca000 P=1 W=1 U=1
+
+write result=1; translated page=DFCA000
+kernel read into untouched buffer: R
+parent before lazy-page fork: free=56773 user-pages=8197 page-tables=73
+child after touching inherited lazy page: free=56685 user-pages=8197 page-tables=74
+parent after child exit: free=56773 user-pages=8197 page-tables=73
+pid 6 lazytest: trap 14 err 6 on cpu 0 eip 0x1f3 addr 0x2103000--kill proc
+out-of-range child was killed; parent remains alive
+guard-page probe
+pid 7 lazytest: trap 14 err 7 on cpu 0 eip 0x24f addr 0x1000--kill proc
+guard-page child was killed; parent remains alive
+lazy allocation/fork/buffer checks complete
+$
