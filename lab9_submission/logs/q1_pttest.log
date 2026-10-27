@@ -1,0 +1,14 @@
+=== startup page table ===
+VA=0x0 PA=0xdee8000 P=1 W=1 U=1
+VA=0x2000 PA=0xdee5000 P=1 W=1 U=1
+valid user pages: 2
+page-table pages: 1
+=== after sbrk(4 * 4096) and touching each page ===
+VA=0x0 PA=0xdee8000 P=1 W=1 U=1
+VA=0x2000 PA=0xdee5000 P=1 W=1 U=1
+VA=0x3000 PA=0xdfbc000 P=1 W=1 U=1
+VA=0x4000 PA=0xdf76000 P=1 W=1 U=1
+VA=0x5000 PA=0xdfbf000 P=1 W=1 U=1
+VA=0x6000 PA=0xdfc0000 P=1 W=1 U=1
+valid user pages: 6
+page-table pages: 1
