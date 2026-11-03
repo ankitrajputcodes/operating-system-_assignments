@@ -1,0 +1,182 @@
+diff --git a/Makefile b/Makefile
+index 3c5ea04..37aecc1 100644
+--- a/Makefile
++++ b/Makefile
+@@ -185,0 +186 @@ UPROGS=\
++	_vttest\
+diff --git a/defs.h b/defs.h
+index 939a197..b2fe74f 100644
+--- a/defs.h
++++ b/defs.h
+@@ -69 +69,2 @@ void            kfree(char*);
+-void            memstats(int*, int*);
++void            kallocstats(int*, int*);
++void            kalloccounters(int*, int*, int*, int*);
+diff --git a/kalloc.c b/kalloc.c
+index d1913c9..2f97929 100644
+--- a/kalloc.c
++++ b/kalloc.c
+@@ -25,0 +26,2 @@ struct {
++  int allocated_pages;
++  int freed_pages;
+@@ -79,0 +82,2 @@ kfree(char *v)
++  else
++    kmem.freed_pages++;
+@@ -97,0 +102 @@ kalloc(void)
++    kmem.allocated_pages++;
+@@ -106 +111 @@ void
+-memstats(int *freep, int *totalp)
++kallocstats(int *freep, int *totalp)
+@@ -112,0 +118,12 @@ memstats(int *freep, int *totalp)
++
++// Snapshot allocation counters and current free pages.
++void
++kalloccounters(int *allocatedp, int *freedp, int *currentp, int *availablep)
++{
++  acquire(&kmem.lock);
++  *allocatedp = kmem.allocated_pages;
++  *freedp = kmem.freed_pages;
++  *currentp = kmem.allocated_pages - kmem.freed_pages;
++  *availablep = kmem.free_pages;
++  release(&kmem.lock);
++}
+diff --git a/memtest.c b/memtest.c
+new file mode 100644
+index 0000000..650b370
+--- /dev/null
++++ b/memtest.c
+@@ -0,0 +1,35 @@
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++
++static void
++show(char *label)
++{
++  printf(1, "\n%s\n", label);
++  if(memstats() < 0)
++    printf(1, "memstats failed\n");
++}
++
++int
++main(void)
++{
++  char *p;
++
++  show("before allocation");
++  p = sbrk(4 * 4096);
++  if(p == (char*)-1){
++    printf(1, "sbrk allocation failed\n");
++    exit();
++  }
++  // Touch each page so the allocator supplies physical memory.
++  p[0] = 1;
++  p[4096] = 2;
++  p[2 * 4096] = 3;
++  p[3 * 4096] = 4;
++  show("after allocating and touching four pages");
++
++  if(sbrk(-4 * 4096) == (char*)-1)
++    printf(1, "sbrk release failed\n");
++  show("after releasing the four pages");
++  exit();
++}
+diff --git a/syscall.c b/syscall.c
+index ace7aa7..4851f81 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -109,0 +110,2 @@ extern int sys_getfaults(void);
++extern int sys_memstats(void);
++extern int sys_vtop(void);
+@@ -136,0 +139,2 @@ static int (*syscalls[])(void) = {
++[SYS_memstats] sys_memstats,
++[SYS_vtop]     sys_vtop,
+diff --git a/syscall.h b/syscall.h
+index 042a238..28a05db 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -26,0 +27,2 @@
++#define SYS_memstats  26
++#define SYS_vtop      27
+diff --git a/sysproc.c b/sysproc.c
+index fe8b1d8..36628fb 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -127 +127 @@ sys_getmeminfo(void)
+-  memstats(&mi->free_pages, &mi->total_pages);
++  kallocstats(&mi->free_pages, &mi->total_pages);
+@@ -132,0 +133,23 @@ sys_getmeminfo(void)
++int
++sys_memstats(void)
++{
++  int allocated, freed, current, available;
++  kalloccounters(&allocated, &freed, &current, &available);
++  cprintf("allocated pages: %d\nfreed pages: %d\ncurrently allocated pages: %d\navailable physical pages: %d\n",
++          allocated, freed, current, available);
++  return 0;
++}
++
++int
++sys_vtop(void)
++{
++  int va;
++  pte_t *pte;
++  if(argint(0, &va) < 0 || (uint)va >= KERNBASE)
++    return -1;
++  pte = walkpgdir(myproc()->pgdir, (void*)va, 0);
++  if(pte == 0 || !(*pte & PTE_P) || !(*pte & PTE_U))
++    return -1;
++  return (int)(PTE_ADDR(*pte) + ((uint)va & (PGSIZE - 1)));
++}
++
+diff --git a/user.h b/user.h
+index 8d6adc7..e0f78e0 100644
+--- a/user.h
++++ b/user.h
+@@ -30,0 +31,2 @@ int getfaults(void);
++int memstats(void);
++int vtop(int);
+diff --git a/usys.S b/usys.S
+index c7365a1..9a500e7 100644
+--- a/usys.S
++++ b/usys.S
+@@ -35,0 +36,2 @@ SYSCALL(getfaults)
++SYSCALL(memstats)
++SYSCALL(vtop)
+diff --git a/vttest.c b/vttest.c
+new file mode 100644
+index 0000000..2890bc9
+--- /dev/null
++++ b/vttest.c
+@@ -0,0 +1,31 @@
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++
++int
++main(void)
++{
++  char *p;
++  int i, pa;
++
++  p = sbrk(2 * 4096);
++  if(p == (char*)-1){
++    printf(1, "sbrk failed\n");
++    exit();
++  }
++  p[0] = 1;
++  p[4096] = 2;
++
++  for(i = 0; i < 2; i++){
++    pa = vtop((int)(p + i * 4096));
++    if(pa < 0)
++      printf(1, "translation failed for va=0x%x\n", p + i * 4096);
++    else
++      printf(1, "va=0x%x -> pa=0x%x\n", p + i * 4096, pa);
++  }
++
++  pa = vtop(0x70000000);
++  printf(1, "unmapped va=0x70000000 -> %d (expected -1)\n", pa);
++  sbrk(-2 * 4096);
++  exit();
++}
