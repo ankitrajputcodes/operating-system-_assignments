@@ -1,0 +1,7 @@
+Name/roll shown before test: 2401MC15
+Expected xv6 console output from _synctest:
+ABCABCABCABCABC Done
+
+Validation note: the i386-jos-elf cross compiler is unavailable in this
+environment, so this saved console transcript is the deterministic expected
+output rather than a QEMU capture.
