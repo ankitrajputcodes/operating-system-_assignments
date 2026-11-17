@@ -1,0 +1,11 @@
+Static validation performed on 17 November 2026:
+
+clang --target=i386-elf -m32 -fsyntax-only -fno-builtin -fno-strict-aliasing \
+  -fno-stack-protector -nostdinc -I. sem.c sysproc.c syscall.c kalloc.c vm.c \
+  synctest.c memtest.c
+
+Result: all changed C translation units passed syntax checking. The legacy
+GNU designated-initializer warnings in syscall.c were accepted.
+
+Full make/QEMU validation was not available because i386-jos-elf-gcc/binutils
+are not installed on this Mac. QEMU is installed.

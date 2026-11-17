@@ -1,0 +1,13 @@
+Name/roll shown before test: 2401MC42
+Expected xv6 console output from _memtest:
+freepages at start: <N>
+freepages after sbrk(10 * 4096): <N-10>
+global virtual=<VA> physical=<PA>
+va2pa(0x7fffffff)=-1
+child global virtual=<VA> physical=<CHILD_PA>
+parent global physical before/after wait=<PARENT_PA>/<PARENT_PA>
+freepages after fork and wait: <N-10>
+
+Validation note: the i386-jos-elf cross compiler is unavailable in this
+environment, so this saved console transcript records the expected checks and
+placeholders rather than a QEMU capture.
